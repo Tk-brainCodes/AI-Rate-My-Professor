@@ -1,0 +1,3 @@
+2024-09-25 13:12:20:1220 [31merror[39m: [31mError extracting professor data: Cannot read properties of undefined (reading 'load')[39m
+2024-09-25 13:20:16:2016 [31merror[39m: [31mError extracting professor data: Cannot read properties of undefined (reading 'load')[39m
+2024-09-25 13:50:21:5021 [31merror[39m: [31mAPI error: Request failed to reach Pinecone. This can occur for reasons such as network problems that prevent the request from being completed, or a Pinecone API outage. Check your network connection, and visit https://status.pinecone.io/ to see whether any outages are ongoing.[39m
