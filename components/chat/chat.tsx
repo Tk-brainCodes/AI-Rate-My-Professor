@@ -93,7 +93,10 @@ export default function Chatbot() {
         setisLoading(true);
         const response = await axios.post(
           "/api/chat",
-          { data: [...messages, { role: "user", content: message }] },
+          {
+            data: [...messages, { role: "user", content: message }],
+            urls: ["https://www.ratemyprofessors.com/school/2003"],
+          },
           {
             headers: {
               "Content-Type": "application/json",
