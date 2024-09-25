@@ -2,130 +2,249 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 
 import Groq from "groq-sdk";
-
 import { NextResponse } from "next/server";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import * as cheerio from "cheerio";
+import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
+import { z } from "zod";
+import pLimit from "p-limit";
+import { logger } from "@/config/logger";
+import {
+  SYSTEM_PROMPT,
+  MAX_URLS,
+  PINECONE_INDEX_NAME,
+  PINECONE_NAMESPACE,
+  GROQ_MODEL,
+  EMBEDDING_MODEL,
+  MAX_TOKENS,
+  TEMPERATURE,
+  TOP_P,
+} from "@/config/system-prompt";
 
-const systemPrompt = `# Rate My Professor Agent System Prompt
+interface ProfessorData {
+  professor: string;
+  subject: string;
+  course: string;
+  stars: string;
+  difficulty: string;
+  taken_again: string;
+  reputation?: string;
+  location?: string;
+  opportunities?: string;
+  facilities?: string;
+  internet?: string;
+  food?: string;
+  clubs?: string;
+  social?: string;
+  happiness?: string;
+  safety?: string;
+}
 
-You are an AI assistant designed to help students find professors based on their queries. Your primary function is to use a retrieval-augmented generation (RAG) system to provide the top three most relevant professors for each user query.
+const RequestSchema = z.object({
+  urls: z.array(z.string().url()).max(MAX_URLS),
+  data: z.array(
+    z.object({
+      content: z.string(),
+    })
+  ),
+});
 
-## Your capabilities:
-1. Access to a comprehensive database of professor information, including:
-   - Name and title
-   - Department and institution
-   - Areas of expertise
-   - Teaching style and methods
-   - Student ratings and reviews
-   - Course difficulty and workload
-   - Grading practices
-   - Availability outside of class
+// Dynamically load and extract professor data from web pages
+const extractProfessorData = (html: string): ProfessorData[] => {
+  try {
+    const $ = cheerio.load(html);
+    const professorData: ProfessorData[] = [];
 
-2. Ability to understand and interpret various types of student queries, such as:
-   - Specific subject areas or courses
-   - Teaching styles (e.g., interactive, lecture-based)
-   - Grading preferences (e.g., lenient, strict)
-   - Personality traits (e.g., approachable, engaging)
-   - Research opportunities
-   - Career guidance
+    // Extract relevant elements containing professor data
+    const professorElements = $("body *").filter((i, el) => {
+      const hasName = $(el).text().toLowerCase().includes("professor");
+      const hasRating =
+        $(el).text().toLowerCase().includes("stars") ||
+        $(el).text().toLowerCase().includes("rating");
+      return hasName || hasRating;
+    });
 
-3. Use of RAG to retrieve and synthesize information from the database to provide accurate and relevant responses.
+    professorElements.each((index, element) => {
+      const professor =
+        $(element).find(":contains('Professor')").text() || "Unknown";
+      const subject =
+        $(element).find(":contains('Subject')").text() || "Unknown";
+      const course = $(element).find(":contains('Course')").text() || "Unknown";
+      const stars =
+        $(element).find(":contains('Stars'), :contains('rating')").text() ||
+        "Unknown";
+      const difficulty =
+        $(element).find(":contains('Difficulty')").text() || "Unknown";
+      const takenAgain =
+        $(element).find(":contains('Taken Again')").text() || "Unknown";
 
-## Your tasks:
-1. Analyze the user's query to understand their specific needs and preferences.
-2. Use the RAG system to retrieve information about professors that best match the query.
-3. Rank the professors based on relevance to the query and overall ratings.
-4. Present the top three professors, including:
-   - Name and basic information
-   - A brief summary of why they match the query
-   - Key strengths and potential drawbacks
-   - Overall rating and notable student feedback
+      const reputation =
+        $(element).find(":contains('Reputation')").text() || "Unknown";
+      const location =
+        $(element).find(":contains('Location')").text() || "Unknown";
+      const opportunities =
+        $(element).find(":contains('Opportunities')").text() || "Unknown";
+      const facilities =
+        $(element).find(":contains('Facilities')").text() || "Unknown";
+      const internet =
+        $(element).find(":contains('Internet')").text() || "Unknown";
+      const food = $(element).find(":contains('Food')").text() || "Unknown";
+      const clubs = $(element).find(":contains('Clubs')").text() || "Unknown";
+      const social = $(element).find(":contains('Social')").text() || "Unknown";
+      const happiness =
+        $(element).find(":contains('Happiness')").text() || "Unknown";
+      const safety = $(element).find(":contains('Safety')").text() || "Unknown";
 
-5. Offer to provide more detailed information about any of the recommended professors if requested.
+      professorData.push({
+        professor: professor.trim(),
+        subject: subject.trim(),
+        course: course.trim(),
+        stars: stars.trim(),
+        difficulty: difficulty.trim(),
+        taken_again: takenAgain.trim(),
+        reputation: reputation.trim(),
+        location: location.trim(),
+        opportunities: opportunities.trim(),
+        facilities: facilities.trim(),
+        internet: internet.trim(),
+        food: food.trim(),
+        clubs: clubs.trim(),
+        social: social.trim(),
+        happiness: happiness.trim(),
+        safety: safety.trim(),
+      });
+    });
 
-## Guidelines:
-- Always prioritize the student's specific needs and preferences in your recommendations.
-- Provide balanced information, including both positive and constructive feedback for each professor.
-- If a query is too broad, ask follow-up questions to narrow down the search criteria.
-- If a query doesn't yield any suitable matches, explain why and suggest alternative search criteria.
-- Maintain a friendly and helpful tone, but remain objective in your assessments.
-- Respect privacy by not sharing personal information about professors beyond what is publicly available in the database.
-- If asked about your capabilities or limitations, be honest and transparent.
+    if (professorData.length === 0) {
+      console.log("No professor data found in this structure.");
+    }
 
-Remember, your goal is to help students make informed decisions about their education by providing relevant, accurate, and helpful information about professors.`;
+    return professorData;
+  } catch (error) {
+    logger.error("Error extracting professor data:", error);
+    return [];
+  }
+};
+
+// Function to load and process documents from URLs
+const loadDocumentsFromUrls = async (urls: string[]) => {
+  const limit = pLimit(5); // Limit concurrent requests
+  const loaders = urls.map((url) =>
+    limit(() => new CheerioWebBaseLoader(url).load())
+  );
+  const docs = await Promise.all(loaders);
+  return docs.flat();
+};
 
 export async function POST(req: Request) {
-  const { data } = await req.json();
-
-  const pc = new Pinecone({
-    apiKey: process.env.PINECONE_API_KEY as string,
-  });
-
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY as string });
-
-  const index = pc.Index("quickstart").namespace("ns1");
-
-  // Extracts the content of the last message in the data array
-  const text = data[data.length - 1].content;
-
-  const embeddings = new GoogleGenerativeAIEmbeddings({
-    apiKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY as string,
-    modelName: "embedding-001",
-  });
-  const results = await index.query({
-    topK: 3, // Retrieve the top 3 most relevant results
-    includeMetadata: true,
-    vector: await embeddings.embedQuery(text),
-  });
-
-  let returnedResults =
-    "\n\n Returned results from vector db (done automatically): ";
-
-  // Iterate through each match in the results and append the professor's details to the returnedResults string
-  results.matches.forEach((result: any) => {
-    returnedResults += `\n 
-         professor: ${result?.metadata?.professor},
-          subject: ${result?.metadata?.subject},
-          course: ${result?.metadata?.course},
-          stars: ${result?.metadata?.stars},
-          difficulty: ${result?.metadata?.difficulty},
-          taken_again: ${result?.metadata?.taken_again}
-          \n\n
-    `;
-  });
-
-  const lastMessage = data[data.length - 1];
-  const lastMessageContent = lastMessage.content;
-  const lastDataWithoutLastMessage = data.slice(0, data.length - 1);
-
-  const chatCompletion = await groq.chat.completions.create({
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...lastDataWithoutLastMessage,
-      { role: "user", content: lastMessageContent },
-    ],
-    model: "llama3-8b-8192",
-    temperature: 1,
-    max_tokens: 1024,
-    top_p: 1,
-    stream: true,
-    stop: null,
-  });
-
-  let chatContent = "";
   try {
-    for await (const chunk of chatCompletion) {
-      const content = chunk.choices[0]?.delta?.content || "";
-      process.stdout.write(content);
-      chatContent += content;
-    }
-  } catch (error) {
-    console.error("An error occurred during chat completion:", error);
-    return new NextResponse("Something went wrong", { status: 500 });
-  } finally {
-    console.log("Chat completion process has finished.");
-  }
+    const body = await req.json();
+    const { data, urls } = RequestSchema.parse(body);
 
-  return new NextResponse(chatContent);
+    console.log("urls coming from frontend", urls)
+
+    const docs = await loadDocumentsFromUrls(urls);
+
+    console.log("loaded docs from url :", docs)
+
+    const pc = new Pinecone({
+      apiKey: process.env.PINECONE_API_KEY as string,
+    });
+
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY as string });
+
+    const index = pc.Index(PINECONE_INDEX_NAME).namespace(PINECONE_NAMESPACE);
+
+    const embeddings = new GoogleGenerativeAIEmbeddings({
+      apiKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY as string,
+      modelName: EMBEDDING_MODEL,
+    });
+
+    const extractedProfessors = docs.flatMap((doc) =>
+      extractProfessorData(doc.pageContent)
+    );
+    await Promise.all(
+      extractedProfessors.map(async (professor) => {
+        try {
+          const vector = await embeddings.embedQuery(
+            `${professor.professor}, ${professor.subject}, ${professor.course}, ${professor.stars}, ${professor.difficulty}, ${professor.taken_again}, ${professor.reputation}, ${professor.location}, ${professor.opportunities}, ${professor.facilities}, ${professor.internet}, ${professor.food}, ${professor.clubs}, ${professor.social}, ${professor?.happiness}, ${professor.safety} `
+          );
+          await index.upsert([
+            {
+              id: professor.professor,
+              values: vector,
+              metadata: { ...professor },
+            },
+          ]);
+        } catch (error) {
+          logger.error(
+            `Error upserting professor ${professor.professor}:`,
+            error
+          );
+        }
+      })
+    );
+
+    const text = data[data.length - 1].content;
+    const queryEmbedding = await embeddings.embedQuery(text);
+    const results = await index.query({
+      topK: 3,
+      includeMetadata: true,
+      vector: queryEmbedding,
+    });
+
+    let returnedResults = "\n\n Returned results from vector db: ";
+    results.matches.forEach((result: any) => {
+      returnedResults += `\n ${JSON.stringify(result.metadata, null, 2)}\n\n`;
+    });
+
+    const lastMessage = data[data.length - 1].content;
+    const lastDataWithoutLastMessage = data.slice(0, data.length - 1);
+
+    // Updated message format
+    const messages = [
+      { role: "system" as const, content: SYSTEM_PROMPT },
+      ...lastDataWithoutLastMessage.map((msg) => ({
+        role: "user" as const,
+        content: msg.content,
+      })),
+      { role: "user" as const, content: lastMessage },
+    ];
+
+    const chatCompletion = await groq.chat.completions.create({
+      messages,
+      model: GROQ_MODEL,
+      temperature: TEMPERATURE,
+      max_tokens: MAX_TOKENS,
+      top_p: TOP_P,
+      stream: true,
+      stop: null,
+    });
+
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const chunk of chatCompletion) {
+            const content = chunk.choices[0]?.delta?.content || "";
+            controller.enqueue(content);
+          }
+          controller.close();
+        } catch (error) {
+          logger.error("Error during chat completion:", error);
+          controller.error(error);
+        }
+      },
+    });
+
+    return new NextResponse(stream, {
+      headers: { "Content-Type": "text/plain" },
+    });
+  } catch (error) {
+    logger.error("API error:", error);
+    return new NextResponse(
+      JSON.stringify({ error: "An error occurred processing your request" }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
 }
