@@ -19,7 +19,11 @@ const LinkInput = () => {
   };
 
   return (
-    <div className='mb-[1.5em]'>
+    <div className='mb-[1.5em] mt-[2.3em] flex flex-col items-center justify-center'>
+      <div className="mb-[1em] flex items-center flex-col justify-center">
+        <h3 className="text-3xl text-black dark:text-white font-semibold">Submit a link to a rate my professor page</h3>
+        <p className="text-slate-500 text-sm">When the link is submitted, it process the data using webscraping which is inserted into the chatbot for conversations.</p>
+      </div>
       <PlaceholdersAndVanishInput
         placeholders={placeholders}
         onChange={handleChange}
