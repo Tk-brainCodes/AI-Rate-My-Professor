@@ -10,7 +10,7 @@ import Image from "next/image";
 export default function Dashboard() {
   return (
     <div className='flex flex-col'>
-      <header className='sticky bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500  top-0 z-10 flex h-[57px] items-center justify-between gap-1 bg-background px-4'>
+      <header className='sticky z-40 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500  top-0 flex h-[57px] items-center justify-between gap-1 bg-background px-4'>
         <h1 className='text-xl font-semibold flex items-center gap-4 px-2 py-2'>
           Rate my professor
           <Image
